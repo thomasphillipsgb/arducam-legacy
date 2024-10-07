@@ -1,26 +1,26 @@
 //! This library aims to provide support for older legacy Arducam cameras such as ArduCAM Mini 2MP Plus
 //! It provides `embedded-hal` compatible API
-//! 
+//!
 //! # Example
 //! ```rust
 //! #![no_std]
 //! #![no_main]
-//! 
+//!
 //! use stm32_hal2::{pac, gpio::{Pin, Port, PinMode, OutputType}, spi::{Spi, BaudRate}, i2c::I2c, timer::Timer};
 //! use cortex_m::delay::Delay;
-//! 
+//!
 //! use arducam_legacy::Arducam;
-//! 
+//!
 //! fn main() -> ! {
 //!     let cp = cortex_m::Peripherals::take().unwrap();
 //!     let dp = pac::Peripherals::take().unwrap();
-//! 
+//!
 //!     // Clocks setup
 //!     let clock_cfg = stm32_hal2::clocks::Clocks::default();
 //!     clock_cfg.setup().unwrap();
 //!     let mut delay = Delay::new(cp.SYST, clock_cfg.systick());
 //!     let mut mono_timer = Timer::new_tim2(dp.TIM2, 100.0, Default::default(), &clock_cfg);
-//! 
+//!
 //!     // Example pinout configuration
 //!     // Adapt to your HAL crate
 //!     let _arducam_spi_mosi = Pin::new(Port::D, 4, PinMode::Alt(5));
@@ -33,7 +33,7 @@
 //!     let mut arducam_i2c_scl = Pin::new(Port::F, 1, PinMode::Alt(4));
 //!     arducam_i2c_scl.output_type(OutputType::OpenDrain);
 //!     let arducam_i2c = I2c::new(dp.I2C2, Default::default(), &clock_cfg);
-//! 
+//!
 //!     let mut arducam = Arducam::new(
 //!         arducam_spi,
 //!         arducam_i2c,
@@ -41,13 +41,13 @@
 //!         arducam_legacy::Resolution::Res320x240, arducam_legacy::ImageFormat::JPEG
 //!         );
 //!     arducam.init(&mut delay).unwrap();
-//!     
+//!
 //!     arducam.start_capture().unwrap();
 //!     while !arducam.is_capture_done().unwrap() { delay.delay_ms(1) }
 //!     let mut image = [0; 8192];
 //!     let length = arducam.get_fifo_length().unwrap();
 //!     let final_length = arducam.read_captured_image(&mut image).unwrap();
-//! 
+//!
 //!     loop {}
 //! }
 //! ```
@@ -57,7 +57,7 @@
 
 use core::{fmt, slice::IterMut};
 
-use embedded_hal::{blocking::{spi::{self, Transfer}, i2c, delay::DelayMs}, digital::v2::OutputPin};
+use embedded_hal::{delay::DelayNs, i2c::I2c, spi::SpiDevice};
 use ov2640_registers::*;
 
 mod ov2640_registers;
@@ -78,10 +78,10 @@ const CAP_DONE_MASK: u8 = 0x08;
 
 #[derive(fmt::Debug)]
 /// Possible errors which can happen during communication
-pub enum Error<SpiErr, I2cErr, PinErr> {
-    Spi(SpiErr),
-    I2c(I2cErr),
-    Pin(PinErr),
+pub enum Error {
+    Spi,
+    I2c,
+    Pin,
     OutOfBounds
 }
 
@@ -108,25 +108,22 @@ pub enum ImageFormat {
 }
 
 /// Main struct responsible for communicating with Arducam
-pub struct Arducam<SPI, I2C, CS> {
+pub struct Arducam<SPI, I2C> {
     spi: SPI,
-    spi_cs: CS,
     i2c: I2C,
     format: ImageFormat,
     resolution: Resolution
 }
 
-impl<SPI, I2C, CS, SpiErr, I2cErr, PinErr> Arducam<SPI, I2C, CS>
+impl<SPI, I2C> Arducam<SPI, I2C>
 where
-    SPI: Transfer<u8, Error = SpiErr> + spi::Write<u8, Error = SpiErr>,
-    I2C: i2c::Write<Error = I2cErr> + i2c::WriteRead<Error = I2cErr>,
-    CS: OutputPin<Error = PinErr>
+    SPI: SpiDevice,
+    I2C: I2c,
 {
     /// Creates a new Arducam instance but doesn't initialize it
-    pub fn new(spi: SPI, i2c: I2C, cs_pin: CS, resolution: Resolution, format: ImageFormat) -> Arducam<SPI, I2C, CS> {
+    pub fn new(spi: SPI, i2c: I2C, resolution: Resolution, format: ImageFormat) -> Arducam<SPI, I2C> {
         Arducam {
             spi,
-            spi_cs: cs_pin,
             i2c,
             format,
             resolution,
@@ -134,9 +131,9 @@ where
     }
 
     /// Initializes Arducam to resetted state
-    pub fn init<D>(&mut self, delay: &mut D) -> Result<(), Error<SpiErr, I2cErr, PinErr>>
+    pub fn init<D>(&mut self, delay: &mut D) -> Result<(), Error>
     where
-        D: DelayMs<u32>
+        D: DelayNs
     {
         self.arduchip_write_reg(0x07, 0x80)?;
         delay.delay_ms(100);
@@ -163,14 +160,14 @@ where
     }
 
     /// Sets camera resolution
-    pub fn set_resolution(&mut self, resolution: Resolution) -> Result<(), Error<SpiErr, I2cErr, PinErr>> {
+    pub fn set_resolution(&mut self, resolution: Resolution) -> Result<(), Error> {
         self.resolution = resolution;
         self.send_resolution()?;
         Ok(())
     }
 
     /// Checks if Arducam is still connected to SPI bus
-    pub fn is_connected(&mut self) -> Result<bool, Error<SpiErr, I2cErr, PinErr>> {
+    pub fn is_connected(&mut self) -> Result<bool, Error> {
         let test_value = 0x52;
         self.arduchip_write_reg(ARDUCHIP_TEST1, test_value)?;
         let result = self.arduchip_read_reg(ARDUCHIP_TEST1)?;
@@ -188,35 +185,38 @@ where
     }
 
     /// Sends image capture request
-    pub fn start_capture(&mut self) -> Result<(), Error<SpiErr, I2cErr, PinErr>> {
+    pub fn start_capture(&mut self) -> Result<(), Error> {
         self.flush_fifo()?;
         self.start_fifo()?;
         Ok(())
     }
 
     /// Checks if image capture is done
-    pub fn is_capture_done(&mut self) -> Result<bool, Error<SpiErr, I2cErr, PinErr>> {
+    pub fn is_capture_done(&mut self) -> Result<bool, Error> {
         self.arduchip_read_reg(ARDUCHIP_TRIG).map(|result| { result & CAP_DONE_MASK != 0 })
     }
 
     /// Saves captured image to provided mutable slice
     /// It is important to be sure if that slice will be big enough for image data
     /// otherwise data will be cut
-    /// 
+    ///
     /// # Returns
     /// Actual image size
-    pub fn read_captured_image(&mut self, data_out: IterMut<u8>) -> Result<usize, Error<SpiErr, I2cErr, PinErr>>
+    pub fn read_captured_image(&mut self, data_out: IterMut<u8>) -> Result<usize, Error>
     {
         let length = self.get_fifo_length()?;
         let mut final_length = 0;
-        self.spi_cs.set_low().map_err(Error::Pin)?;
+
+        // self.spi_cs.set_low().map_err(Error::Pin)?;
         self.set_fifo_burst()?;
         let mut curr_byte = 0;
         #[allow(unused_assignments)]
         let mut prev_byte = 0;
         for (i, b) in data_out.enumerate() {
             prev_byte = curr_byte;
-            curr_byte = self.spi.transfer(&mut [0x00]).map_err(Error::Spi)?[0];
+            let buf = &mut [0x00];
+            self.spi.read(buf).map_err(|_| {Error::Spi})?;
+            curr_byte = buf[0];
             *b = curr_byte;
             if prev_byte == 0xFF && curr_byte == 0xD9 || i as u32 > length {
                 final_length = i;
@@ -228,7 +228,7 @@ where
     }
 
     /// Returns image length reported by arduchip in FIFO
-    pub fn get_fifo_length(&mut self) -> Result<u32, Error<SpiErr, I2cErr, PinErr>> {
+    pub fn get_fifo_length(&mut self) -> Result<u32, Error> {
         let mut len_builder = (0u32, 0u32, 0u32);
         len_builder.0 = self.arduchip_read_reg(FIFO_SIZE1)?.into();
         len_builder.1 = self.arduchip_read_reg(FIFO_SIZE2)?.into();
@@ -237,7 +237,7 @@ where
     }
 
     /// Returns sensor vendor and product ID
-    pub fn get_sensor_chipid(&mut self) -> Result<[u8; 2], Error<SpiErr, I2cErr, PinErr>> {
+    pub fn get_sensor_chipid(&mut self) -> Result<[u8; 2], Error> {
         let mut chipid: [u8; 2] = [0; 2];
         self.sensor_writereg8_8(0xFF, 0x01)?;
         self.sensor_readreg8_8(OV2640_CHIPID_HIGH, &mut chipid[0..1])?;
@@ -245,7 +245,7 @@ where
         Ok(chipid)
     }
 
-    fn send_resolution(&mut self) -> Result<(), Error<SpiErr, I2cErr, PinErr>> {
+    fn send_resolution(&mut self) -> Result<(), Error> {
         unsafe {
             match self.resolution {
                 Resolution::Res160x120 => { self.sensor_writeregs8_8(&OV2640_160x120_JPEG)? },
@@ -263,63 +263,64 @@ where
         Ok(())
     }
 
-    fn flush_fifo(&mut self) -> Result<(), Error<SpiErr, I2cErr, PinErr>> {
+    fn flush_fifo(&mut self) -> Result<(), Error> {
         self.arduchip_write_reg(ARDUCHIP_FIFO, FIFO_CLEAR_MASK)
     }
 
-    fn start_fifo(&mut self) -> Result<(), Error<SpiErr, I2cErr, PinErr>> {
+    fn start_fifo(&mut self) -> Result<(), Error> {
         self.arduchip_write_reg(ARDUCHIP_FIFO, FIFO_START_MASK)
     }
 
-    fn set_fifo_burst(&mut self) -> Result<(), Error<SpiErr, I2cErr, PinErr>> {
-        self.spi.write(&[FIFO_BURST]).map_err(Error::Spi)
+    fn set_fifo_burst(&mut self) -> Result<(), Error> {
+        self.spi.write(&[FIFO_BURST]).map_err(|_| {Error::Spi})
     }
 
-    fn arduchip_write(&mut self, addr: u8, data: u8) -> Result<(), Error<SpiErr, I2cErr, PinErr>> {
-        self.spi_cs.set_low().map_err(Error::Pin)?;
-        self.spi.write(&[addr; 1]).map_err(Error::Spi)?;
-        self.spi.write(&[data; 1]).map_err(Error::Spi)?;
-        self.spi_cs.set_high().map_err(Error::Pin)?;
+    fn arduchip_write(&mut self, addr: u8, data: u8) -> Result<(), Error> {
+        // self.spi_cs.set_low().map_err(Error::Pin)?;
+        self.spi.write(&[addr; 1]).map_err(|_| {Error::Spi})?;
+        self.spi.write(&[data; 1]).map_err(|_| {Error::Spi})?;
+        // self.spi_cs.set_high().map_err(Error::Pin)?;
         Ok(())
     }
 
-    fn arduchip_read(&mut self, addr: u8) -> Result<u8, Error<SpiErr, I2cErr, PinErr>> {
-        self.spi_cs.set_low().map_err(Error::Pin)?;
-        self.spi.transfer(&mut [addr; 1]).map_err(Error::Spi)?;
-        let value = self.spi.transfer(&mut [0; 1]).map_err(Error::Spi)?[0];
-        self.spi_cs.set_high().map_err(Error::Pin)?;
-        Ok(value)
+    fn arduchip_read(&mut self, addr: u8) -> Result<u8, Error> {
+        // self.spi_cs.set_low().map_err(Error::Pin)?;
+        let buf = &mut [0x00];
+        self.spi.write(&mut [addr; 1]).map_err(|_| {Error::Spi})?;
+        self.spi.read(buf).map_err(|_| {Error::Spi})?;
+        // let value = self.spi.transfer(&mut [0; 1]).map_err(|_| {Error::Spi})?[0];
+        // self.spi_cs.set_high().map_err(Error::Pin)?;
+        Ok(buf[0])
     }
 
-    fn arduchip_write_reg(&mut self, addr: u8, data: u8) -> Result<(), Error<SpiErr, I2cErr, PinErr>> {
+    fn arduchip_write_reg(&mut self, addr: u8, data: u8) -> Result<(), Error> {
         self.arduchip_write(addr | 0x80, data)
     }
 
-    fn arduchip_read_reg(&mut self, addr: u8) -> Result<u8, Error<SpiErr, I2cErr, PinErr>> {
+    fn arduchip_read_reg(&mut self, addr: u8) -> Result<u8, Error> {
         self.arduchip_read(addr & 0x7F)
     }
 
-    fn sensor_writeregs8_8(&mut self, regs: &[[u8; 2]]) -> Result<(), Error<SpiErr, I2cErr, PinErr>> {
+    fn sensor_writeregs8_8(&mut self, regs: &[[u8; 2]]) -> Result<(), Error> {
         for reg in regs {
             self.sensor_writereg8_8(reg[0], reg[1])?;
         }
         Ok(())
     }
 
-    fn sensor_writereg8_8(&mut self, reg: u8, data: u8) -> Result<(), Error<SpiErr, I2cErr, PinErr>> {
-        self.i2c.write(OV2640_ADDR, &[reg & 0xFF, data & 0xFF]).map_err(Error::I2c)
+    fn sensor_writereg8_8(&mut self, reg: u8, data: u8) -> Result<(), Error> {
+        self.i2c.write(OV2640_ADDR, &[reg & 0xFF, data & 0xFF]).map_err(|_| {Error::I2c})
     }
 
-    fn sensor_readreg8_8(&mut self, reg: u8, out: &mut [u8]) -> Result<(), Error<SpiErr, I2cErr, PinErr>> {
-        self.i2c.write_read(OV2640_ADDR, &[reg & 0xFF], out).map_err(Error::I2c)
+    fn sensor_readreg8_8(&mut self, reg: u8, out: &mut [u8]) -> Result<(), Error> {
+        self.i2c.write_read(OV2640_ADDR, &[reg & 0xFF], out).map_err(|_| {Error::I2c})
     }
 }
 
-impl<SPI, I2C, CS> fmt::Debug for Arducam<SPI, I2C, CS>
+impl<SPI, I2C> fmt::Debug for Arducam<SPI, I2C>
 where
     SPI: fmt::Debug,
     I2C: fmt::Debug,
-    CS: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Arducam")
