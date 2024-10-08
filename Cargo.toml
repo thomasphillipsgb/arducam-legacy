@@ -13,6 +13,7 @@ readme = "README.md"
 [dependencies]
 embedded-hal = "1.0.0"
 embedded-io = "0.6"
+log = "0.4"
 
 [build-dependencies]
 cc = "1.0.79"

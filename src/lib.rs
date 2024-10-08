@@ -140,6 +140,7 @@ where
         self.arduchip_write_reg(0x07, 0x00)?;
         delay.delay_ms(100);
         self.sensor_writereg8_8(0xFF, 0x01)?;
+        delay.delay_ms(100);
         self.sensor_writereg8_8(0x12, 0x80)?;
         delay.delay_ms(100);
 
@@ -147,6 +148,7 @@ where
             unsafe {
                 self.sensor_writeregs8_8(&OV2640_JPEG_INIT)?;
                 self.sensor_writeregs8_8(&OV2640_YUV422)?;
+                self.sensor_writeregs8_8(&OV2640_JPEG)?;
             }
             self.sensor_writereg8_8(0xFF, 0x01)?;
             self.sensor_writereg8_8(0x15, 0x00)?;
@@ -202,7 +204,7 @@ where
     ///
     /// # Returns
     /// Actual image size
-    pub fn read_captured_image(&mut self, data_out: IterMut<u8>) -> Result<usize, Error>
+    pub fn read_captured_image(&mut self, out: &mut [u8]) -> Result<usize, Error>
     {
         let length = self.get_fifo_length()?;
         let mut final_length = 0;
@@ -212,7 +214,8 @@ where
         let mut curr_byte = 0;
         #[allow(unused_assignments)]
         let mut prev_byte = 0;
-        for (i, b) in data_out.enumerate() {
+        let mut i = 0;
+        for b in out {
             prev_byte = curr_byte;
             let buf = &mut [0x00];
             self.spi.read(buf).map_err(|_| {Error::Spi})?;
@@ -222,6 +225,7 @@ where
                 final_length = i;
                 break;
             }
+            i += 1;
         }
         self.flush_fifo()?;
         Ok(final_length)
@@ -276,18 +280,20 @@ where
     }
 
     fn arduchip_write(&mut self, addr: u8, data: u8) -> Result<(), Error> {
-        // self.spi_cs.set_low().map_err(Error::Pin)?;
-        self.spi.write(&[addr; 1]).map_err(|_| {Error::Spi})?;
-        self.spi.write(&[data; 1]).map_err(|_| {Error::Spi})?;
-        // self.spi_cs.set_high().map_err(Error::Pin)?;
+        log::info!("Addr: {} WriteData: {:?}", addr, data);
+        self.spi.transaction(&mut [
+            embedded_hal::spi::Operation::Write(&[addr]),
+            embedded_hal::spi::Operation::Write(&[data]),
+        ]).map_err(|_| {Error::Spi})?;
         Ok(())
     }
 
     fn arduchip_read(&mut self, addr: u8) -> Result<u8, Error> {
         // self.spi_cs.set_low().map_err(Error::Pin)?;
-        let buf = &mut [0x00];
-        self.spi.write(&mut [addr; 1]).map_err(|_| {Error::Spi})?;
-        self.spi.read(buf).map_err(|_| {Error::Spi})?;
+        let buf = &mut [addr; 1];
+        self.spi.transfer_in_place(buf).map_err(|_| {Error::Spi})?;
+        // self.spi.read(buf).map_err(|_| {Error::Spi})?;
+        log::info!("Addr: {} ReadData: {:?}", addr, buf[0]);
         // let value = self.spi.transfer(&mut [0; 1]).map_err(|_| {Error::Spi})?[0];
         // self.spi_cs.set_high().map_err(Error::Pin)?;
         Ok(buf[0])
