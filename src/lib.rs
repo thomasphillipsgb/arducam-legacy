@@ -204,31 +204,29 @@ where
     ///
     /// # Returns
     /// Actual image size
-    pub fn read_captured_image(&mut self, out: &mut [u8]) -> Result<usize, Error>
+    pub fn read_captured_image(&mut self, out: &mut [u8], holding: &[u8]) -> Result<usize, Error>
     {
-        let length = self.get_fifo_length()?;
-        let mut final_length = 0;
-
         // self.spi_cs.set_low().map_err(Error::Pin)?;
-        self.set_fifo_burst()?;
-        let mut curr_byte = 0;
-        #[allow(unused_assignments)]
-        let mut prev_byte = 0;
-        let mut i = 0;
-        for b in out {
-            prev_byte = curr_byte;
-            let buf = &mut [0x00];
-            self.spi.read(buf).map_err(|_| {Error::Spi})?;
-            curr_byte = buf[0];
-            *b = curr_byte;
-            if prev_byte == 0xFF && curr_byte == 0xD9 || i as u32 > length {
-                final_length = i;
-                break;
-            }
-            i += 1;
-        }
+        self.spi.transaction(&mut [
+            embedded_hal::spi::Operation::Write(&[FIFO_BURST]),
+            embedded_hal::spi::Operation::Transfer(out, holding),
+        ]).map_err(|_| {Error::Spi})?;
+
+        // self.spi.read(out).map_err(|_| {Error::Spi})?;
+        // for b in out {
+        //     prev_byte = curr_byte;
+        //     let buf = &mut [0x00];
+        //     self.spi.read(buf).map_err(|_| {Error::Spi})?;
+        //     curr_byte = buf[0];
+        //     *b = curr_byte;
+        //     if prev_byte == 0xFF && curr_byte == 0xD9 || i as u32 > length {
+        //         final_length = i;
+        //         break;
+        //     }
+        //     i += 1;
+        // }
         self.flush_fifo()?;
-        Ok(final_length)
+        Ok(out.len())
     }
 
     /// Returns image length reported by arduchip in FIFO
