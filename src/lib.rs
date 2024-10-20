@@ -280,7 +280,6 @@ where
     }
 
     fn arduchip_write(&mut self, addr: u8, data: u8) -> Result<(), Error> {
-        log::info!("Addr: {} WriteData: {:?}", addr, data);
         self.spi.transaction(&mut [
             embedded_hal::spi::Operation::Write(&[addr]),
             embedded_hal::spi::Operation::Write(&[data]),
@@ -289,13 +288,11 @@ where
     }
 
     fn arduchip_read(&mut self, addr: u8) -> Result<u8, Error> {
-        // self.spi_cs.set_low().map_err(Error::Pin)?;
-        let buf = &mut [addr; 1];
-        self.spi.transfer_in_place(buf).map_err(|_| {Error::Spi})?;
-        // self.spi.read(buf).map_err(|_| {Error::Spi})?;
-        log::info!("Addr: {} ReadData: {:?}", addr, buf[0]);
-        // let value = self.spi.transfer(&mut [0; 1]).map_err(|_| {Error::Spi})?[0];
-        // self.spi_cs.set_high().map_err(Error::Pin)?;
+        let buf = &mut [0; 1];
+        self.spi.transaction(&mut [
+            embedded_hal::spi::Operation::Write(&mut [addr; 1]),
+            embedded_hal::spi::Operation::Read(buf),
+        ]).map_err(|_| {Error::Spi})?;
         Ok(buf[0])
     }
 
