@@ -204,12 +204,12 @@ where
     ///
     /// # Returns
     /// Actual image size
-    pub fn read_captured_image(&mut self, out: &mut [u8], holding: &[u8]) -> Result<usize, Error>
+    pub fn read_captured_image(&mut self, out: &mut [u8]) -> Result<usize, Error>
     {
         // self.spi_cs.set_low().map_err(Error::Pin)?;
         self.spi.transaction(&mut [
             embedded_hal::spi::Operation::Write(&[FIFO_BURST]),
-            embedded_hal::spi::Operation::Transfer(out, holding),
+            embedded_hal::spi::Operation::Read(out),
         ]).map_err(|_| {Error::Spi})?;
 
         // self.spi.read(out).map_err(|_| {Error::Spi})?;
