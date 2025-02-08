@@ -211,6 +211,8 @@ where
         self.spi.transaction(&mut [
             embedded_hal::spi::Operation::Write(&[FIFO_BURST]),
             embedded_hal::spi::Operation::Read(out),
+            embedded_hal::spi::Operation::Write(&[ARDUCHIP_FIFO | WRITE_FLAG]),
+            embedded_hal::spi::Operation::Write(&[FIFO_CLEAR_MASK]),
         ]).map_err(|_| {Error::Spi})?;
 
         self.flush_fifo()?;
@@ -261,9 +263,9 @@ where
         self.arduchip_write_reg(ARDUCHIP_FIFO, FIFO_START_MASK)
     }
 
-    fn set_fifo_burst(&mut self) -> Result<(), Error> {
-        self.spi.write(&[FIFO_BURST]).map_err(|_| {Error::Spi})
-    }
+    // fn set_fifo_burst(&mut self) -> Result<(), Error> {
+    //     self.spi.write(&[FIFO_BURST]).map_err(|_| {Error::Spi})
+    // }
 
     fn arduchip_write(&mut self, addr: u8, data: u8) -> Result<(), Error> {
         self.spi.transaction(&mut [
