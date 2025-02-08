@@ -75,6 +75,7 @@ const FIFO_SIZE1: u8 = 0x42;
 const FIFO_SIZE2: u8 = 0x43;
 const FIFO_SIZE3: u8 = 0x44;
 const CAP_DONE_MASK: u8 = 0x08;
+const WRITE_FLAG: u8 = 0x80;
 
 #[derive(fmt::Debug)]
 /// Possible errors which can happen during communication
@@ -204,7 +205,7 @@ where
     ///
     /// # Returns
     /// Actual image size
-    pub fn read_captured_image(&mut self, out: &mut [u8]) -> Result<usize, Error>
+    pub fn read_captured_image(&mut self, out: &mut [u8]) -> Result<(), Error>
     {
         // self.spi_cs.set_low().map_err(Error::Pin)?;
         self.spi.transaction(&mut [
@@ -212,21 +213,8 @@ where
             embedded_hal::spi::Operation::Read(out),
         ]).map_err(|_| {Error::Spi})?;
 
-        // self.spi.read(out).map_err(|_| {Error::Spi})?;
-        // for b in out {
-        //     prev_byte = curr_byte;
-        //     let buf = &mut [0x00];
-        //     self.spi.read(buf).map_err(|_| {Error::Spi})?;
-        //     curr_byte = buf[0];
-        //     *b = curr_byte;
-        //     if prev_byte == 0xFF && curr_byte == 0xD9 || i as u32 > length {
-        //         final_length = i;
-        //         break;
-        //     }
-        //     i += 1;
-        // }
         self.flush_fifo()?;
-        Ok(out.len())
+        Ok(())
     }
 
     /// Returns image length reported by arduchip in FIFO
@@ -295,7 +283,7 @@ where
     }
 
     fn arduchip_write_reg(&mut self, addr: u8, data: u8) -> Result<(), Error> {
-        self.arduchip_write(addr | 0x80, data)
+        self.arduchip_write(addr | WRITE_FLAG, data)
     }
 
     fn arduchip_read_reg(&mut self, addr: u8) -> Result<u8, Error> {
