@@ -76,6 +76,7 @@ const FIFO_SIZE2: u8 = 0x43;
 const FIFO_SIZE3: u8 = 0x44;
 const CAP_DONE_MASK: u8 = 0x08;
 const WRITE_FLAG: u8 = 0x80;
+const READ_FLAG: u8 = 0x7F;
 
 #[derive(fmt::Debug)]
 /// Possible errors which can happen during communication
@@ -207,15 +208,11 @@ where
     /// Actual image size
     pub fn read_captured_image(&mut self, out: &mut [u8]) -> Result<(), Error>
     {
-        // self.spi_cs.set_low().map_err(Error::Pin)?;
         self.spi.transaction(&mut [
-            embedded_hal::spi::Operation::Write(&[FIFO_BURST]),
+            embedded_hal::spi::Operation::Write(&[FIFO_BURST & READ_FLAG]),
             embedded_hal::spi::Operation::Read(out),
-            embedded_hal::spi::Operation::Write(&[ARDUCHIP_FIFO | WRITE_FLAG]),
-            embedded_hal::spi::Operation::Write(&[FIFO_CLEAR_MASK]),
+            embedded_hal::spi::Operation::Write(&[ARDUCHIP_FIFO | WRITE_FLAG, FIFO_CLEAR_MASK]),
         ]).map_err(|_| {Error::Spi})?;
-
-        self.flush_fifo()?;
         Ok(())
     }
 
@@ -224,7 +221,7 @@ where
         let mut len_builder = (0u32, 0u32, 0u32);
         len_builder.0 = self.arduchip_read_reg(FIFO_SIZE1)?.into();
         len_builder.1 = self.arduchip_read_reg(FIFO_SIZE2)?.into();
-        len_builder.2 = (self.arduchip_read_reg(FIFO_SIZE3)? & 0x7F).into();
+        len_builder.2 = (self.arduchip_read_reg(FIFO_SIZE3)? & READ_FLAG).into();
         Ok((len_builder.2 << 16 | len_builder.1 << 8 | len_builder.0) as u32 & 0x7FFFFFu32)
     }
 
@@ -263,14 +260,9 @@ where
         self.arduchip_write_reg(ARDUCHIP_FIFO, FIFO_START_MASK)
     }
 
-    // fn set_fifo_burst(&mut self) -> Result<(), Error> {
-    //     self.spi.write(&[FIFO_BURST]).map_err(|_| {Error::Spi})
-    // }
-
     fn arduchip_write(&mut self, addr: u8, data: u8) -> Result<(), Error> {
         self.spi.transaction(&mut [
-            embedded_hal::spi::Operation::Write(&[addr]),
-            embedded_hal::spi::Operation::Write(&[data]),
+            embedded_hal::spi::Operation::Write(&[addr, data]),
         ]).map_err(|_| {Error::Spi})?;
         Ok(())
     }
@@ -278,7 +270,7 @@ where
     fn arduchip_read(&mut self, addr: u8) -> Result<u8, Error> {
         let buf = &mut [0; 1];
         self.spi.transaction(&mut [
-            embedded_hal::spi::Operation::Write(&mut [addr; 1]),
+            embedded_hal::spi::Operation::Write(&mut [addr]),
             embedded_hal::spi::Operation::Read(buf),
         ]).map_err(|_| {Error::Spi})?;
         Ok(buf[0])
@@ -289,7 +281,7 @@ where
     }
 
     fn arduchip_read_reg(&mut self, addr: u8) -> Result<u8, Error> {
-        self.arduchip_read(addr & 0x7F)
+        self.arduchip_read(addr & READ_FLAG)
     }
 
     fn sensor_writeregs8_8(&mut self, regs: &[[u8; 2]]) -> Result<(), Error> {
